@@ -16,14 +16,9 @@ class BatchBills:
         pd.set_option('display.max_rows', None)
         pd.set_option('max_colwidth', 30)
         pd.set_option('display.width', 1000)
-        print(f'\n ======== {string}:')
-        print(df)
-        print(f"-----------The DataFrame has {df.shape[0]} rows and {df.shape[1]} columns.\n")
+        print(df.reset_index(drop=True))   #重新把留下来的数据按顺序排列打印
+        print(f"-----------{string},数据部分共 {df.shape[0]} 行 {df.shape[1]} 列.\n")
         
-    def _read_balance(self):
-        return pd.read_excel(self.cfg.BASECSV, sheet_name='余额')
-
-
     def _get_record_filenames(self):
         path = self.cfg.RECORDS_DIR
         file_list = os.listdir(path)
@@ -35,7 +30,7 @@ class BatchBills:
                 file_list_alipay.append(os.path.join(path, file))
             elif self.cfg.WEI['FILE_HEADER'] in file:
                 file_list_wechat.append(os.path.join(path, file))
-            elif file == '.old_records':
+            elif file == 'old_records':
                 continue
             else:
                 raise ValueError('账单文件名不正确')
@@ -43,6 +38,8 @@ class BatchBills:
             raise ValueError('请检查账单文件夹RECORDS_DIR，没有账单要添加')
         return file_list_alipay, file_list_wechat
 
+    def import_records_excel(self,Excel):
+        return pd.read_excel(Excel, sheet_name='Records')
 
     def export_excel(self):
         cfg = self.cfg
@@ -82,29 +79,38 @@ class BatchBills:
         df = df.iloc[:, CFG['COLS']]  #从原表格中抓取列
         df.insert(1, '来源', source)
         df.insert(8, '修订金额', 0.0)
-        df.insert(10, '小类', '')
+        df.insert(10, '智能分类', df.iloc[:, 9])
         df.columns = self.column_name
         df['金额'] = df['金额'].map(lambda x: x.strip('¥')if isinstance(x, str) else x)
         df = df.astype(self.cfg.DTYPE)
         return df
 
-
     def data_filtering(self):
-        df = self.bills 
-        before = df.shape[0]
+        filtered_data = pd.DataFrame()  #用于存储被过滤的数据
+        before = self.bills.shape[0]
+
         for column_name, keywords in self.cfg.KEYWORD_FILTER.items():
+                df = self.bills 
                 if column_name == '金额':
                     df = df[~df[column_name].isin(keywords)]
+                    filtered_tmp = self.bills[~self.bills.index.isin(df.index)]
+                    filtered_data = pd.concat([filtered_data, filtered_tmp])
+                    self.bills  = df
                 else:
                     for word in keywords:
                         df = df[~df[column_name].str.contains(str(word))]  
-        self.bills  = df
-        after = df.shape[0]
-        print(f"-----------已过滤无效数据[ {before-after} ]行,剩余有效数据[ {after} ]行.\n")
+                    filtered_tmp = self.bills[~self.bills.index.isin(df.index)]
+                    filtered_data = pd.concat([filtered_data, filtered_tmp])
+                    self.bills  = df
 
+        after = self.bills.shape[0]
+        print(f"-----------已过滤无效数据[ {before-after} ]行,剩余有效数据[ {after} ]行：")
+        filtered_data = filtered_data.iloc[:, [1,2,3,5,7,9]]  #从原表格中抓取列
+        self.dfprint(filtered_data,"被过滤的数据")
 
     def adjust_balance(self):
         df = self.bills 
+        BANKCARD=self.cfg.BANKCARD
         # 删除重复行
         before = df.shape[0]
         df = df.drop_duplicates()
@@ -122,17 +128,17 @@ class BatchBills:
                     (df['商品'].str.contains('余额宝.*收益发放')) |
                     (df['支付状态'].str.contains('赔付成功'))         ), ['收支']] = '收入'  
 
-        # 支付宝走消费的银行卡尾号0139 收入
-        df.loc[(df['支付方式'].str.contains('0139')) & (df['收支'].str.contains('不计收支')) & (df['商品'].str.contains('转入')) , ['收支']] = '收入'
-        df.loc[(df['支付方式'].str.contains('0139')) & (df['收支'].str.contains('不计收支')) & (df['商品'].str.contains('转出')) , ['收支']] = '支出'
+        # 支付宝走消费的银行卡 收入
+        df.loc[(df['支付方式'].str.contains(BANKCARD)) & (df['收支'].str.contains('不计收支')) & (df['商品'].str.contains('转入')) , ['收支']] = '收入'
+        df.loc[(df['支付方式'].str.contains(BANKCARD)) & (df['收支'].str.contains('不计收支')) & (df['商品'].str.contains('转出')) , ['收支']] = '支出'
 
-        #  微信零钱 走消费的银行卡尾号0139 支出
-        df.loc[(df['支付方式'].str.contains('0139')) & (df['收支'].str.contains('/')) & (df['大类'].str.contains('充值')) , ['收支']] = '收入'
-        df.loc[(df['支付方式'].str.contains('0139')) & (df['收支'].str.contains('/')) & (df['大类'].str.contains('提现')) , ['收支']] = '支出'
+        #  微信零钱 走消费的银行卡 支出
+        df.loc[(df['支付方式'].str.contains(BANKCARD)) & (df['收支'].str.contains('/')) & (df['分类'].str.contains('充值')) , ['收支']] = '收入'
+        df.loc[(df['支付方式'].str.contains(BANKCARD)) & (df['收支'].str.contains('/')) & (df['分类'].str.contains('提现')) , ['收支']] = '支出'
 
-        #  微信余额宝 走消费的银行卡尾号0139 支出
-        df.loc[(df['大类'].str.contains('0139')) & (df['收支'].str.contains('/')) & (df['大类'].str.contains('转入')) , ['收支']] = '收入'
-        df.loc[(df['大类'].str.contains('0139')) & (df['收支'].str.contains('/')) & (df['大类'].str.contains('转出')) , ['收支']] = '支出'
+        #  微信余额宝 走消费的银行卡 支出
+        df.loc[(df['分类'].str.contains(BANKCARD)) & (df['收支'].str.contains('/')) & (df['分类'].str.contains('转入')) , ['收支']] = '收入'
+        df.loc[(df['分类'].str.contains(BANKCARD)) & (df['收支'].str.contains('/')) & (df['分类'].str.contains('转出')) , ['收支']] = '支出'
         ################ 收入支出转换
         after = len(df[df['收支'].isin(['支出', '收入'])])
 

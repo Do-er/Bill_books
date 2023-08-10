@@ -3,9 +3,17 @@ import time
 import numpy as np
 from enum import Enum
 
-#抓取的列表#       [日期时间 ---- 收支 支付状态 支付方式 交易对方 商品 金额 ------- 大类 ------]
-#完整的列表#       [日期时间 来源 收支 支付状态 支付方式 交易对方 商品 金额 修订金额 大类 小类]
+#抓取的列表#       [日期时间 ---- 收支 支付状态 支付方式 交易对方 商品 金额 ------- 分类 ------]
+#完整的列表#       [日期时间 来源 收支 支付状态 支付方式 交易对方 商品 金额 修订金额 分类 智能分类]
 class GlobalConfig:
+    def cfgprint(self):
+        print(f'\n\n\t\t================================================ 基于配置信息 ================================================')
+        print(f'\t\t    工资卡尾号：【 {self.BANKCARD} 】')
+        print(f'\t\t    过滤关键词：')
+        for column_name, keywords  in self.KEYWORD_FILTER.items():
+            print(f'\t\t\t规则：{column_name} \t包含：{keywords}')
+        print(f'\t\t================================================ 重要配置信息 ================================================')
+
     ZFB = { 'INV_ROW': 24 ,                                   # csv文件开头需要舍弃的行
                 'ENCODING': 'GBK' ,
                 'COLS': [0, 5, 8, 7, 2, 4, 6, 1] ,
@@ -18,22 +26,28 @@ class GlobalConfig:
     }
     
     KEYWORD_FILTER = {           #自定义关键词过滤,字符串格式支持通配符
-        # '来源': [''],
         '收支': ['/','不计收支'],  #自己账户之间互转不统计
         '支付状态': ['退款成功', '交易关闭', '还款成功','对方已退还','已全额退款','已退款￥'],
+        '金额': [0,0.1,0.01]
         # '支付方式': [''],
         # '交易对方': [''],
         # '商品': [''],
-        '金额': [0,0.1]
+        # '来源': [''],
     }
 
+    #工资卡 (转入转出工资卡的算作收支)
+    BANKCARD = '0139'
 
     #  账本路径 和 账单文件夹,设置excel单元格默认列宽
     EXPORT = 'Export'
-    SAVECSV = os.path.join(EXPORT, f'Bill_{time.strftime("%Y%m%d_%H%M%S", time.localtime())}.xlsx')
-
     RECORDS_DIR = 'records'
-    EXCEL_WIDTH =   [22, 7, 10, 10, 20, 20, 30, 10, 15, 16,30]
+    TIME = time.strftime("%Y%m%d_%H%M%S", time.localtime())
+    SAVECSV = os.path.join(EXPORT, f'Bill_{TIME}.xlsx')
+    # SAVECSV = os.path.join(EXPORT, f'Bill_test.xlsx')
+    SAVEHTML = os.path.join(EXPORT, f'Bill_{TIME}.html')
+    # SAVEHTML = os.path.join(EXPORT, f'Bill_test.html')
+    EXCEL_WIDTH =   [22, 7, 10, 10, 20, 20, 30, 10, 15, 13,13]
+
     # 这里的列名和表格保持一致，最终导出样式
     DTYPE = { '日期时间': 'datetime64[ns]', 
                     '来源': str, 
@@ -44,259 +58,145 @@ class GlobalConfig:
                     '商品': str,
                     '金额': float, 
                     '修订金额': float, 
-                    '大类': str,
-                    '小类': str 
+                    '分类': str,
+                    '智能分类': str 
     }
     Labels = {
-        '收支': ['投资理财','餐饮美食','交通出行','日用百货','医疗健康','保险','服饰装扮',
-        '退款','充值缴费','转账红包','信用借还','收入','生活服务','文化休闲','美容美发',
-        '数码电器','家居家装','酒店旅游','其他','亲友代付','账户存取','运动户外'  ]
+        '智能分类': ['银行存取','投资理财','餐饮美食','交通出行','日用百货','医疗健康','保险','服饰装扮',
+        '充值缴费','转账红包','信用借还','收入','生活服务','文化休闲','美容美发',
+        '数码电器','家居家装','酒店旅游','其他','亲友代付','运动户外' ,'商业服务']
     }
 
 class AutoLabelRules:
     def __init__(self):
-        """自动标注规则
-        #支持的规则项
-        ######来源  收支  支付状态    支付方式    交易对方    商品  金额  修订金额    大类
-        #执行规则,大括号内可以填多个列，每个至少有一项满足即规则生效,举例：
-        [            
-         {'收支': '支出'},       
-         {'交易对方': food_brand,'商品': '北京-环保园M地块|满座儿|美团订单'},
-         {'金额': (30, 60)}
-        ],
+        cfg = GlobalConfig()
+        """自定义规则
+        举例('#'后面为用法解释)：
+        ===========================================
+            '转账红包':      #下面[]里面的条件满足时，'智能分类'的名字会被设置成这个
+                    [    
+                        {'分类': '转账|红包'},   #大括号里，每个':'前面为列名，后面为需要判断的字符
+                        ...                                     #可以多个大括号，每个大括号必须同时满足
+                        {'商品': '二维码收款',...,'来源': '微信'},    #大括号中可以多对，只要里面任意一对满足即可
+                    ], 
+
+            '账户存取':      
+                    [               
+                            [   
+                                {'支付方式': cfg.BANKCARD},   
+                                {'商品': '转入|转出','分类': '充值|提现'},
+                            ],
+                            ...     #可以有多组规则指向同一个分类名 这里规则-> '账户存取'
+                            ...     #每组需要都写上中括号
+                            [
+                                {'分类': cfg.BANKCARD},
+                                {'分类': '转入|转出'},
+                            ],
+                   ],
+        ===========================================
+        #支持的列名:  来源  收支  支付状态    支付方式    交易对方    商品  金额  修订金额    分类
+        #智能分类建议选用参数：
+            '银行存取','投资理财','餐饮美食','交通出行','日用百货','医疗健康','保险','服饰装扮',
+            '充值缴费','转账红包','信用借还','收入','生活服务','文化休闲','美容美发',
+            '数码电器','家居家装','酒店旅游','其他','亲友代付','运动户外' ,'商业服务'
         """
-        food_brand = '麦当劳|肯德基|海底捞|和府捞面|无名缘米粉|满座儿|牛肉面|美食|外婆家|西北莜面村|必胜客|潘多拉|' \
-                     '火锅|串串|水煮鱼|自助餐|家常菜|川菜|烤肉|韩国料理|绝味|麻辣烫|杨国福|咕水|杭研所二期'
 
+        餐饮美食 = ('小吃|肠粉|味道|铁板|虾滑|芋泥|奶茶|小笼包|包子|汤包|面条|小面|小馆|美团订单|' 
+                            '麦当劳|肯德基|海底捞|捞面|米粉|满座儿|美食|外婆家|西北莜面村|必胜客|潘多拉|蜜雪冰城|萨莉亚|小龙坎|' 
+                            '牛肉|羊肉|火锅|串串|水煮鱼|家常菜|烤肉|韩国料理|绝味|麻辣烫|杨国福|咕水|杭研所二期|'
+                            '菜馆|饭店|面馆|湘菜|川菜|粤菜|湘菜|鲁菜|东北菜|西餐|日料|韩料|意大利菜|'
+                            '咖啡馆|茶餐厅|面馆|酒吧|快餐店|餐厅|餐馆|里小厨|'
+                            '堂食|外卖|订餐|送餐|点餐|自助餐|宴会|包间|脆皮|饼|馒头|面包|馕|'
+                            '披萨|汉堡|寿司|炸鸡|炸薯条|饺子|烧卖|牛排|鲜果|蔬菜|水果|牛奶|果汁|饮料|'
+                            '可口可乐|百事可乐|雪碧|芬达|七喜|美年达|脉动|农夫山泉|苏打水|雪山水|百岁山|'
+                            '王老吉|康师傅|养生堂|乌龙茶|绿茶|红茶|奶茶|怡宝|汇源|果粒橙|鲜橙多|果蔬汁|'
+                            '星巴克|雀巢咖啡|拿铁|卡布奇诺|景田|健力宝|'
+                            '红牛|风味奶|酸奶|茉酸奶')
+
+
+        交通出行 = ('捷安特|美利达|喜德盛|打车|公交|公共交通|地铁|轨道交通|哈啰出行|单车|蒜芽信息|智行|出行|乘车|'
+                            '出租车|专车|约车|专车|滴滴|花小猪|汽车|车票|机票|船票|火车|高铁|飞机' )
+
+        日用百货 = ('超市|便利店')
+        文化休闲 = ('文具|书籍')
+        充值缴费 = ('充值|缴费|水费|电费|能耗费|云牧科技|腾讯云|阿里云|iCloud')
+
+        美容美发 = ('美发|美甲|理发|造型|美睫|脱毛|美体|SPA|按摩|护理|面部护理|'
+                            '洗剪吹|烫发|染发|造型|接发|护发|发型|发膜|发油|'
+                            '修甲|甲油|指甲艺术|指甲延长|甲片|甲贴|'
+                            '化妆品|护肤品|面膜|乳液|精华液|口红|眼影|睫毛膏|腮红')
+
+        酒店旅游 = ('旅游|景区|景点|观光|旅行社'
+                            '酒店|旅馆|客栈|民宿|度假村|宾馆|青年旅舍|'
+                            '单人间|双人间|豪华套房|标准间|家庭房|海景房|湖景房')
+
+
+        #匹配规则：当匹配到前面的类，则后面的不再执行，如有交集，优先级低的写后面
         self.rules = {
+            '银行存取':
+                    [
+                            [
+                                {'支付方式': cfg.BANKCARD},
+                                {'商品': '转入|转出','分类': '充值|提现'},
+                            ],
+                            [
+                                {'分类': cfg.BANKCARD},
+                                {'分类': '转入|转出'},
+                            ],
+                   ],
+
+            '转账红包':
+                    [
+                        {'来源': '微信'},
+                        {'分类': '转账|红包'},
+                    ], 
+
             '餐饮美食':
-                [
-                    {'来源': '微信'},
-                    {'交易对方': food_brand},
-                ],
+                    [
+                        {'来源': '微信'},
+                        {'交易对方': 餐饮美食 ,'商品': 餐饮美食 },
+                    ],
+
             '交通出行':
-                [
-                    {'来源': '微信'},
-                    {'交易对方': '公交|公共交通|地铁|轨道交通|共享单车|哈啰出行|单车',
-                     '商品': '公交|公共交通|地铁|轨道交通|单车'},
-                ],
+                    [
+                        {'来源': '微信'},
+                        {'交易对方': 交通出行,'商品': 交通出行},
+                    ], 
+
+            '文化休闲':
+                    [
+                        {'来源': '微信'},
+                        {'交易对方': 文化休闲,'商品': 文化休闲},
+                    ],
+
+            '美容美发':
+                    [
+                        {'来源': '微信'},
+                        {'交易对方': 美容美发,'商品': 美容美发},
+                    ],
+
             '日用百货':
-                [
-                    {'来源': '微信'},
-                    {'商品': '二维码收款'},
-                ],
-            '账户存取':
-                [
-                    {'支付方式': '中信'},
-                    {'大类': '转入|转出'},
-                ],
-            # '日用百货':
-            #     [
-            #         {'来源': '微信'},
-            #         {'商品': '二维码收款'},
-            #     ],
-            # '日用百货':
-            #     [
-            #         {'来源': '微信'},
-            #         {'商品': '二维码收款'},
-            #     ],
-            # '日用百货':
-            #     [
-            #         {'来源': '微信'},
-            #         {'商品': '二维码收款'},
-            #     ],
-            # BillLabels.food_luxurious:
-            #     [
-            #         {'收支': '支出'},
-            #         {'交易对方': food_brand,
-            #          '商品': '北京-环保园M地块|满座儿'},
-            #         {'金额': (60, np.inf)}
-            #     ],
-            # BillLabels.food_drinks:
-            #     [
-            #         {'交易对方': '奈雪的茶|luckin|喜茶|茶太良品|Blueglass|一点点',
-            #          '商品': 'CoCo|星巴克|奶茶|咖啡|coffee|酸奶'}
-            #     ],
-            # BillLabels.food_fruit:
-            #     [
-            #         {'收支': '支出'},
-            #         {'交易对方': '水果'},
-            #     ],
-            # BillLabels.food_cook:
-            #     [
-            #         {'收支': '支出'},
-            #         {'交易对方': '惠民果蔬|盒马'},
-            #     ],
+                    [
+                        {'来源': '微信'},
+                        {'交易对方': 日用百货,'商品': 日用百货},
+                    ],
 
-            # BillLabels.daily_delivery:
-            #     [
-            #         {'收支': '支出'},
-            #         {'交易对方': '顺丰速运|中国邮政|EMS|中通|圆通|申通|韵达'},
-            #     ],
-            # BillLabels.daily_utilities:
-            #     [
-            #         {'收支': '支出'},
-            #         {'交易对方': '电力公司|燃气公司',
-            #          '商品': '话费|电费|燃气费|网费|天然气'}
-            #     ],
-
-            # BillLabels.house_rent:
-            #     [
-            #         {'收支': '支出'},
-            #         {'交易对方': '自如'}
-            #     ],
+            '酒店旅游':
+                    [
+                        {'来源': '微信'},
+                        {'交易对方': 酒店旅游,'商品': 酒店旅游},
+                    ], 
+            '充值缴费':
+                    [
+                        {'来源': '微信'},
+                        {'交易对方': 充值缴费,'商品': 充值缴费},
+                    ],
 
 
-            # BillLabels.transport_taxi:
-            #     [
-            #         {'收支': '支出'},
-            #         {'交易对方': '滴滴出行|高德', '商品': '打车|快车'},
-            #     ],
-            # BillLabels.transport_train_plane:
-            #     [
-            #         {'收支': '支出'},
-            #         {'商品': '火车票|飞机票|12306'},
-            #     ],
-
-            # BillLabels.finance_interest_on_deposit:
-            #     [
-            #         {'收支': '收入'},
-            #         {'来源': '微信'},
-            #         # {'来源': '支付宝'},
-            #         {'商品': '余额宝.+收益发放'},
-            #     ],
+            '其他':
+                    [
+                        {'来源': '微信'},
+                        {'分类': '二维码|商户消费|付款码'},
+                    ],
         }
 
-# class MajorLabels(Enum):
-#     food = '餐饮美食'
-#     daily = '日用百货'
-#     shopping = '购物'
-#     fashion = '时尚'
-#     transport = '交通出行'
-#     house = '住房'
-#     health = '健康'
-#     study = '学习'
-#     relation = '人情往来'
-#     amusement = '娱乐'
-#     child = '养育子女'
-#     other_expenses = '其他支出'
-#     entry = '主要收入'
-#     finance = '投资理财'
-#     gift = '礼金礼物'
-#     other_incoming = '其他收入'
-
-# sep = '_'
-# class BillLabels(Enum):
-#     food_simple = MajorLabels.food.value + sep + '简餐(29-)'
-#     food_big = MajorLabels.food.value + sep + '奢华(30~60)'
-#     food_luxurious = MajorLabels.food.value + sep + '饕餮(60+)'
-#     food_fruit = MajorLabels.food.value + sep + '水果'
-#     food_snacks = MajorLabels.food.value + sep + '零食'
-#     food_drinks = MajorLabels.food.value + sep + '饮料'
-#     food_meal_replacement = MajorLabels.food.value + sep + '代餐'
-#     food_cook = MajorLabels.food.value + sep + '做饭开销'
-#     food_others = MajorLabels.food.value + sep + '其他'
-
-#     daily_utilities = MajorLabels.daily.value + sep + '水电燃、网费、电话费'
-#     daily_use = MajorLabels.daily.value + sep + '生活用品'
-#     daily_clean = MajorLabels.daily.value + sep + '美容美发、洗澡、洗衣'
-#     daily_delivery = MajorLabels.daily.value + sep + '快递物流'
-#     daily_others = MajorLabels.daily.value + sep + '其他'
-
-#     shopping_office = MajorLabels.shopping.value + sep + '桌面办公'
-#     shopping_electronics = MajorLabels.shopping.value + sep + '电子产品'
-#     shopping_cooking_utensil = MajorLabels.shopping.value + sep + '厨具'
-#     shopping_furniture = MajorLabels.shopping.value + sep + '家具'
-#     shopping_appliance = MajorLabels.shopping.value + sep + '家电'
-#     shopping_bedding = MajorLabels.shopping.value + sep + '床品、纺织'
-#     shopping_tools = MajorLabels.shopping.value + sep + '工具、线缆、收纳、支架'
-#     shopping_toys = MajorLabels.shopping.value + sep + '玩具、摆件'
-#     shopping_others = MajorLabels.shopping.value + sep + '其他'
-
-#     fashion_clothes = MajorLabels.fashion.value + sep + '衣服、裤子'
-#     fashion_underwear = MajorLabels.fashion.value + sep + '内衣、袜子'
-#     fashion_bag_hats = MajorLabels.fashion.value + sep + '鞋帽箱包'
-#     fashion_ornament = MajorLabels.fashion.value + sep + '饰品'
-#     fashion_beauty = MajorLabels.fashion.value + sep + '护肤美妆'
-#     fashion_others = MajorLabels.fashion.value + sep + '其他'
-
-#     transport_public = MajorLabels.transport.value + sep + '公共交通'
-#     transport_taxi = MajorLabels.transport.value + sep + '打车、租车'
-#     transport_train_plane = MajorLabels.transport.value + sep + '客车、火车、飞机'
-#     transport_fuel_toll_park = MajorLabels.transport.value + sep + '车辆燃油、过路费、停车费'
-#     transport_car_repair = MajorLabels.transport.value + sep + '车辆保险、保养、维修'
-#     transport_parking_space = MajorLabels.transport.value + sep + '车位'
-#     transport_others = MajorLabels.transport.value + sep + '其他'
-
-#     house_rent = MajorLabels.house.value + sep + '房租'
-#     house_loan = MajorLabels.house.value + sep + '房贷'
-#     house_decoration = MajorLabels.house.value + sep + '房屋装修、维修'
-#     house_move = MajorLabels.house.value + sep + '搬家'
-#     house_others = MajorLabels.house.value + sep + '其他'
-
-#     health_hospital = MajorLabels.health.value + sep + '就医'
-#     health_medical_product = MajorLabels.health.value + sep + '医疗产品'
-#     health_insurance = MajorLabels.health.value + sep + '保险'
-#     health_fitness_sports = MajorLabels.health.value + sep + '健身运动'
-#     health_care = MajorLabels.health.value + sep + '保健品、推拿、按摩'
-#     health_others = MajorLabels.health.value + sep + '其他'
-
-#     study_tuition = MajorLabels.study.value + sep + '学费、知识付费、课程付费'
-#     study_copyright_pay = MajorLabels.study.value + sep + '版权费、著作费、软件费'
-#     study_book = MajorLabels.study.value + sep + '书籍'
-#     study_stationery = MajorLabels.study.value + sep + '文体用具、材料打印'
-#     study_instrument = MajorLabels.study.value + sep + '乐器'
-#     study_others = MajorLabels.study.value + sep + '其他'
-
-#     amusement_audio_video = MajorLabels.amusement.value + sep + '影音付费'
-#     amusement_game = MajorLabels.amusement.value + sep + '游戏付费'
-#     amusement_app = MajorLabels.amusement.value + sep + 'APP付费'
-#     amusement_travel = MajorLabels.amusement.value + sep + '旅游：景点门票、纪念品'
-#     amusement_gathering = MajorLabels.amusement.value + sep + '聚会：KTV、酒吧、桌游'
-#     amusement_relax = MajorLabels.amusement.value + sep + '休闲：展览、音乐会、演唱会、LiveHouse'
-#     amusement_others = MajorLabels.amusement.value + sep + '其他'
-
-#     relation_lover = MajorLabels.relation.value + sep + '恋人'
-#     relation_parents = MajorLabels.relation.value + sep + '父母'
-#     relation_brother_sister = MajorLabels.relation.value + sep + '兄弟姐妹'
-#     relation_friend = MajorLabels.relation.value + sep + '朋友'
-#     relation_relative = MajorLabels.relation.value + sep + '亲戚'
-#     relation_colleague = MajorLabels.relation.value + sep + '同事'
-#     relation_charity = MajorLabels.relation.value + sep + '慈善捐助'
-#     relation_others = MajorLabels.relation.value + sep + '其他'
-
-#     child_education = MajorLabels.child.value + sep + '子女教育'
-#     child_others = MajorLabels.child.value + sep + '其他'
-
-#     other_expenses_work_expenses = MajorLabels.other_expenses.value + sep + '无法报销的工作开支'
-#     other_expenses_5_insurance_1_fond = MajorLabels.other_expenses.value + sep + '五险一金'
-#     other_expenses_individual_income_tax = MajorLabels.other_expenses.value + sep + '个人所得税'
-#     other_expenses_CPC_membership = MajorLabels.other_expenses.value + sep + '党费'
-#     other_expenses_others = MajorLabels.other_expenses.value + sep + '其他'
-
-#     # income
-#     entry_salary = MajorLabels.entry.value + sep + '工资'
-#     entry_part_time = MajorLabels.entry.value + sep + '兼职、副业'
-#     entry_bonus = MajorLabels.entry.value + sep + '奖金'
-#     entry_tax_rebate = MajorLabels.entry.value + sep + '退税'
-#     entry_scholarship = MajorLabels.entry.value + sep + '奖学金、助学金、补助'
-#     entry_others = MajorLabels.entry.value + sep + '其他'
-
-#     finance_interest_on_deposit = MajorLabels.finance.value + sep + '货币基金、存款利息'
-#     finance_low_risk = MajorLabels.finance.value + sep + '低风险投资'
-#     finance_high_risk = MajorLabels.finance.value + sep + '高风险投资'
-#     finance_gold = MajorLabels.finance.value + sep + '黄金'
-#     finance_stock = MajorLabels.finance.value + sep + '股票'
-#     finance_insurance = MajorLabels.finance.value + sep + '保险'
-#     finance_others = MajorLabels.finance.value + sep + '其他'
-
-#     gift_from_parents = MajorLabels.gift.value + sep + '父母'
-#     gift_from_friends = MajorLabels.gift.value + sep + '朋友'
-#     gift_lucky_money = MajorLabels.gift.value + sep + '压岁钱'
-#     gift_red_packet = MajorLabels.gift.value + sep + '红包'
-#     gift_from_social_feedback = MajorLabels.gift.value + sep + '社会回馈'
-#     gift_others = MajorLabels.gift.value + sep + '其他'
-
-#     other_incoming_reimburse = MajorLabels.other_incoming.value + sep + '报销'
-#     other_incoming_refund = MajorLabels.other_incoming.value + sep + '押金退款'
-#     other_incoming_others = MajorLabels.other_incoming.value + sep + '其他'
