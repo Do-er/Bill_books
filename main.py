@@ -34,7 +34,7 @@ def main():
 
         make.export_excel()                                                                     #导出为Excel
         
-        # magic.do_visualization(make.bills)                                          #导出可视化图表
+        magic.do_visualization(make.bills)                                          #导出可视化图表
         
         cfg.cfgprint()                                                                              #输出重要配置信息
 
